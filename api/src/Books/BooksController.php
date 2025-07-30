@@ -2,8 +2,8 @@
 
 namespace Api\Books;
 
-use \Psr\Http\Message\ServerRequestInterface as Request;
-use \Psr\Http\Message\ResponseInterface as Response;
+use Psr\Http\Message\ServerRequestInterface as Request;
+use Psr\Http\Message\ResponseInterface as Response;
 
 class BooksController
 {
@@ -12,10 +12,10 @@ class BooksController
         $db = new \PDO('mysql:host=database;dbname=assess_db', 'root', 'secret');
         $db->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
 
-        $books = $db->query('SELECT * FROM books')
-            ->fetchAll();
+        $books = $db->query('SELECT * FROM books')->fetchAll();
 
-        return $response->getBody()->write(json_encode($books));
+        return $response->withHeader('Content-Type', 'application/json')
+                        ->write(json_encode($books));
     }
 
     public function create(Request $request, Response $response)
@@ -23,20 +23,46 @@ class BooksController
         $db = new \PDO('mysql:host=database;dbname=assess_db', 'root', 'secret');
         $db->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
 
-        $params = $request->getQueryParams();
+        $params = $request->getQueryParams(); 
 
-        // Create the new book
-        $db->exec('INSERT INTO books (title, author_id) VALUES ("'.$params['title'].'", "'.$params['author_id'].'")');
+   
+        if (empty($params['title']) || empty($params['author_id']) || empty($params['currency_code']) || empty($params['price'])) {
+            return $response->withStatus(400)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->write(json_encode(['error' => 'Missing required fields']));
+        }
+
+    
+        $stmt = $db->prepare('INSERT INTO books (title, author_id) VALUES (:title, :author_id)');
+        $stmt->execute([
+            ':title' => $params['title'],
+            ':author_id' => $params['author_id']
+        ]);
         $book_id = $db->lastInsertId();
 
-        // Create the ZAR price for the book
-        $zar = $db->query('SELECT * FROM currencies WHERE iso = "ZAR"')->fetch();
-        $db->exec('INSERT INTO book_pricing (book_id, currency_id, price) VALUES ('.$book_id.', '.$zar['id'].', '.$params['price']['ZAR'].')');
+        $currencyCode = strtoupper(trim($params['currency_code']));
+        $stmt = $db->prepare('SELECT * FROM currencies WHERE iso = :iso');
+        $stmt->execute([':iso' => $currencyCode]);
+        $currency = $stmt->fetch();
 
-        // Fetch the book we just created so we can return it in the response
-        $return = $db->query('SELECT * FROM books WHERE id = '.$book_id)
-            ->fetchAll();
+        if (!$currency) {
+            return $response->withStatus(400)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->write(json_encode(['error' => 'Invalid currency code']));
+        }
 
-        return $response->getBody()->write(json_encode($return));
+      
+        $stmt = $db->prepare('INSERT INTO book_pricing (book_id, currency_id, price) VALUES (:book_id, :currency_id, :price)');
+        $stmt->execute([
+            ':book_id' => $book_id,
+            ':currency_id' => $currency['id'],
+            ':price' => $params['price']
+        ]);
+
+        
+        $book = $db->query('SELECT * FROM books WHERE id = ' . (int)$book_id)->fetch();
+
+        return $response->withHeader('Content-Type', 'application/json')
+                        ->write(json_encode($book));
     }
 }
